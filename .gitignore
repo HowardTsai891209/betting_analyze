@@ -1,0 +1,28 @@
+# Data — raw source files stay local, not in version control
+/data/*.txt
+/data/*.csv
+/data/master/
+/data/raw/
+/data/processing/
+/data/done/
+
+# Logs
+/logs/
+!logs/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# Environment
+.env
+*.env
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,13 @@
+pandas
+numpy
+pymongo
+scikit-learn
+matplotlib
+seaborn
+jupyter
+ipykernel
+python-dotenv
+sqlalchemy
+pymysql
+pytest
+ollama
