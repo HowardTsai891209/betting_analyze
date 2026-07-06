@@ -22,7 +22,7 @@ Step 2 — 依年份拆分：
 以 cron 定時掃描 /data/raw/ 目錄，偵測到新年度 CSV 後自動搬移至 /data/processing/，
 呼叫 Python 清理腳本，並將每次執行的成功或失敗狀態寫入 Log 檔（/logs/pipeline.log），確保數據流向可追蹤。
 
-【資料處理層】Python (Pandas) 清理與轉置 + pytest 單元測試
+【資料處理層】Python (Pandas) 清理與轉置 + pytest 單元測試（同一 branch）
 
 接收 Shell Script 傳入的檔案路徑，對原始資料進行清洗：
 - Demographics：Country / Language 數字編碼 → 對照表解碼為實際國名與語言名稱
