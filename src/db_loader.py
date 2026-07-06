@@ -45,8 +45,38 @@ def load_all_cleaned() -> pd.DataFrame:
     print(f"[載入] 日記錄共 {len(df)} 筆，來源：{[f.name for f in files]}")
     return df
 
+COUNTRY_MAP = {
+    4: "Afghanistan", 8: "Albania", 10: "Antarctica", 12: "Algeria",
+    20: "Andorra", 24: "Angola", 32: "Argentina", 36: "Australia",
+    40: "Austria", 56: "Belgium", 76: "Brazil", 100: "Bulgaria",
+    124: "Canada", 144: "Sri Lanka", 152: "Chile", 156: "China",
+    158: "Taiwan", 191: "Croatia", 196: "Cyprus", 203: "Czech Republic",
+    208: "Denmark", 246: "Finland", 250: "France", 276: "Germany",
+    300: "Greece", 348: "Hungary", 356: "India", 372: "Ireland",
+    376: "Israel", 380: "Italy", 392: "Japan", 410: "Korea (South)",
+    440: "Lithuania", 442: "Luxembourg", 484: "Mexico", 528: "Holland",
+    554: "New Zealand", 578: "Norway", 616: "Poland", 620: "Portugal",
+    642: "Romania", 643: "Russian Federation", 702: "Singapore",
+    703: "Slovakia", 705: "Slovenia", 710: "South Africa", 724: "Spain",
+    752: "Sweden", 756: "Switzerland", 792: "Turkey", 804: "Ukraine",
+    826: "United Kingdom", 840: "USA", 891: "Serbia and Montenegro",
+    1000: "Undefined",
+}
+
+LANGUAGE_MAP = {
+    1: "English", 2: "German", 3: "Italian", 4: "Spanish",
+    5: "Swedish", 6: "French", 7: "Turkish", 8: "Greek",
+    9: "Polish", 10: "Norwegian", 11: "Danish", 12: "Catalan",
+    13: "Czech", 14: "Hungarian", 15: "Dutch", 16: "Portuguese",
+    17: "Russian", 18: "Slovenian", 19: "Croatian", 20: "Slovak",
+    21: "Simple Chinese", 22: "Traditional Chinese",
+}
+
+
 def load_demographics() -> pd.DataFrame:
     df = pd.read_csv(DATA_MASTER / "demographics.csv")
+    df["Country"]  = df["Country"].map(COUNTRY_MAP).fillna("Unknown")
+    df["Language"] = df["Language"].map(LANGUAGE_MAP).fillna("Unknown")
     for col in ["RegDate", "Fstcadate", "Fstpdate"]:
         df[col] = pd.to_datetime(df[col])
     return df
@@ -137,6 +167,57 @@ def insert_mysql(engine, metrics: pd.DataFrame, daily: pd.DataFrame):
         if_exists="replace", index=False
     )
     print(f"[MySQL] summary_by_country: 寫入 {len(summary_country)} 筆")
+
+
+# ── 增量寫入（年度模擬用） ────────────────────────────────────────────────────
+
+def insert_incremental(db, engine, daily_new: pd.DataFrame, demo: pd.DataFrame, year: int):
+    """
+    增量模式：只插入新年度資料，不清空舊資料
+    - daily_bets：先刪除該年舊記錄再插入（idempotent，可重跑）
+    - demographics：只插入不存在的用戶（upsert by UserID）
+    - user_metrics：從 MongoDB 全量 daily_bets 重新計算
+    - MySQL 彙總表：從最新 user_metrics 重新計算
+    """
+    from pymongo import UpdateOne
+
+    # 1. daily_bets：刪除該年舊記錄，插入新記錄
+    start = pd.Timestamp(f"{year}-01-01")
+    end   = pd.Timestamp(f"{year}-12-31 23:59:59")
+    deleted = db["daily_bets"].delete_many({"Date": {"$gte": start, "$lte": end}}).deleted_count
+    if deleted:
+        print(f"[MongoDB] daily_bets: 清除 {year} 年舊記錄 {deleted} 筆")
+
+    daily_copy = daily_new.copy()
+    daily_copy["Date"] = daily_copy["Date"].dt.to_pydatetime()
+    db["daily_bets"].insert_many(daily_copy.to_dict("records"))
+    print(f"[MongoDB] daily_bets: 新增 {year} 年 {len(daily_copy)} 筆，累計 {db['daily_bets'].count_documents({})} 筆")
+
+    # 2. demographics：只插入不存在的用戶
+    demo_copy = demo.copy()
+    for col in ["RegDate", "Fstcadate", "Fstpdate"]:
+        demo_copy[col] = demo_copy[col].dt.to_pydatetime()
+
+    existing_ids = set(db["demographics"].distinct("UserID"))
+    new_users = demo_copy[~demo_copy["UserID"].isin(existing_ids)]
+    if len(new_users):
+        db["demographics"].insert_many(new_users.to_dict("records"))
+    print(f"[MongoDB] demographics: 新增 {len(new_users)} 筆，累計 {db['demographics'].count_documents({})} 筆")
+
+    # 3. user_metrics：從 MongoDB 全量 daily_bets 重新計算（含歷年累積）
+    all_daily = pd.DataFrame(list(db["daily_bets"].find({}, {"_id": 0})))
+    all_daily["Date"] = pd.to_datetime(all_daily["Date"])
+    metrics = compute_user_metrics(all_daily)
+
+    metrics_copy = metrics.copy()
+    metrics_copy["first_active"] = metrics_copy["first_active"].dt.to_pydatetime()
+    metrics_copy["last_active"]  = metrics_copy["last_active"].dt.to_pydatetime()
+    db["user_metrics"].drop()
+    db["user_metrics"].insert_many(metrics_copy.to_dict("records"))
+    print(f"[MongoDB] user_metrics: 重新計算，共 {len(metrics)} 筆")
+
+    # 4. MySQL：從最新 user_metrics 重新計算
+    insert_mysql(engine, metrics, all_daily)
 
 
 # ── 主流程 ────────────────────────────────────────────────────────────────────
